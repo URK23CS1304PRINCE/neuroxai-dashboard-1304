@@ -1,10 +1,11 @@
-# app.py - Fixed version with proper error handling
+# app.py - Complete working version with ONNX Runtime (No TensorFlow needed!)
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import joblib
+import onnxruntime as ort
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -56,18 +57,22 @@ st.markdown("""
         padding: 20px;
         color: #333;
     }
+    .success-box {
+        background: linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%);
+        border-radius: 10px;
+        padding: 15px;
+        text-align: center;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # Initialize session state
 if 'model_loaded' not in st.session_state:
     st.session_state.model_loaded = False
-if 'model' not in st.session_state:
-    st.session_state.model = None
+if 'session' not in st.session_state:
+    st.session_state.session = None
 if 'scaler' not in st.session_state:
     st.session_state.scaler = None
-if 'predictions_made' not in st.session_state:
-    st.session_state.predictions_made = False
 
 # Sidebar
 with st.sidebar:
@@ -81,37 +86,38 @@ with st.sidebar:
         st.success("✅ Model Ready")
         if st.button("🔄 Reload Model"):
             st.session_state.model_loaded = False
-            st.session_state.model = None
+            st.session_state.session = None
             st.session_state.scaler = None
             st.rerun()
     else:
         st.info("Upload your trained model files:")
         
-        model_file = st.file_uploader("Model (.keras or .h5)", type=['keras', 'h5'], key="model_upload")
-        scaler_file = st.file_uploader("Scaler (.pkl)", type=['pkl'], key="scaler_upload")
+        col1, col2 = st.columns(2)
+        with col1:
+            model_file = st.file_uploader("ONNX Model (.onnx)", type=['onnx'], key="model_upload")
+        with col2:
+            scaler_file = st.file_uploader("Scaler (.pkl)", type=['pkl'], key="scaler_upload")
         
         if model_file and scaler_file:
             with st.spinner("Loading model..."):
                 try:
-                    import tensorflow as tf
-                    from tensorflow import keras
-                    
                     # Save uploaded files
-                    with open('temp_model.keras', 'wb') as f:
+                    with open('temp_model.onnx', 'wb') as f:
                         f.write(model_file.getbuffer())
                     with open('temp_scaler.pkl', 'wb') as f:
                         f.write(scaler_file.getbuffer())
                     
-                    # Load model and scaler
-                    st.session_state.model = keras.models.load_model('temp_model.keras')
+                    # Load ONNX model
+                    st.session_state.session = ort.InferenceSession('temp_model.onnx')
                     st.session_state.scaler = joblib.load('temp_scaler.pkl')
                     st.session_state.model_loaded = True
                     st.success("✅ Model loaded successfully!")
                     st.rerun()
-                except ImportError:
-                    st.error("❌ TensorFlow not available. Please install tensorflow or use demo mode.")
                 except Exception as e:
                     st.error(f"Error loading model: {str(e)}")
+        
+        st.markdown("---")
+        st.caption("Need a model? Convert your Keras model to ONNX first.")
     
     st.markdown("---")
     st.caption("© 2024 NeuroXAI DL")
@@ -122,7 +128,7 @@ st.markdown("### Advanced EEG-based Seizure Detection System")
 st.markdown("---")
 
 if not st.session_state.model_loaded:
-    st.info("👈 **Get Started**: Load your trained model files in the sidebar first")
+    st.info("👈 **Get Started**: Upload your ONNX model and scaler files in the sidebar")
     
     # Show instructions
     col1, col2, col3 = st.columns(3)
@@ -131,7 +137,7 @@ if not st.session_state.model_loaded:
         <div class="metric-card">
             <h3>📁</h3>
             <h4>Step 1</h4>
-            <p>Upload Model Files</p>
+            <p>Upload ONNX Model</p>
         </div>
         """, unsafe_allow_html=True)
     with col2:
@@ -151,14 +157,21 @@ if not st.session_state.model_loaded:
         </div>
         """, unsafe_allow_html=True)
     
-    # Demo mode option
     st.markdown("---")
-    if st.button("🎮 Try Demo Mode (No Model Required)"):
-        st.session_state.demo_mode = True
-        st.session_state.model_loaded = True
-        st.rerun()
+    
+    # Demo mode
+    with st.expander("🎮 Try Demo Mode (No Model Required)"):
+        st.write("Test the app with random predictions")
+        if st.button("Start Demo Mode"):
+            st.session_state.demo_mode = True
+            st.session_state.model_loaded = True
+            st.rerun()
 
 else:
+    # Show success message
+    st.markdown('<div class="success-box">✅ Model loaded successfully! Ready for analysis.</div>', unsafe_allow_html=True)
+    st.markdown("---")
+    
     # File upload for EEG data
     st.subheader("📤 Upload EEG Data")
     
@@ -178,20 +191,23 @@ else:
             st.dataframe(df.head())
         
         if st.button("🔬 Analyze EEG", type="primary", use_container_width=True):
-            with st.spinner("🧠 Analyzing..."):
-                # Check if we have a real model or demo mode
-                if st.session_state.model is not None and st.session_state.scaler is not None:
-                    # Use actual model
-                    X_input = st.session_state.scaler.transform(df)
-                    predictions_proba = st.session_state.model.predict(X_input, verbose=0)
+            with st.spinner("🧠 Analyzing with your model..."):
+                # Preprocess
+                X_input = st.session_state.scaler.transform(df)
+                X_input = X_input.astype(np.float32)
+                
+                # Predict using ONNX Runtime
+                if st.session_state.session is not None:
+                    input_name = st.session_state.session.get_inputs()[0].name
+                    predictions_proba = st.session_state.session.run(None, {input_name: X_input})[0]
                     predictions = np.argmax(predictions_proba, axis=1) + 1
                     confidences = np.max(predictions_proba, axis=1)
                 else:
-                    # Demo mode
+                    # Fallback to demo
                     np.random.seed(42)
                     predictions = np.random.choice([1,2,3,4,5], len(df), p=[0.08,0.12,0.15,0.25,0.40])
                     confidences = np.random.uniform(0.75, 0.98, len(df))
-                    st.info("ℹ️ Using demo predictions. Load actual model for real results.")
+                    st.info("ℹ️ Using demo mode. Load actual model for real predictions.")
             
             st.success("✅ Analysis complete!")
             
@@ -212,6 +228,16 @@ else:
                 st.metric("🟢 Low Risk", low_risk, delta=f"{low_risk/len(predictions)*100:.0f}%")
             with col4:
                 st.metric("✅ Normal", normal, delta=f"{normal/len(predictions)*100:.0f}%")
+            
+            # Risk distribution chart
+            risk_data = pd.DataFrame({
+                'Risk Level': ['High Risk', 'Borderline', 'Low Risk', 'Normal'],
+                'Count': [high_risk, moderate_risk, low_risk, normal]
+            })
+            fig = px.bar(risk_data, x='Risk Level', y='Count', color='Risk Level',
+                         color_discrete_sequence=['#e74c3c', '#f39c12', '#2ecc71', '#3498db'],
+                         title="Risk Distribution")
+            st.plotly_chart(fig, use_container_width=True)
             
             # Results table
             st.subheader("📋 Detailed Results")
