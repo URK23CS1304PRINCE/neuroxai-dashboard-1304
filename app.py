@@ -1,11 +1,10 @@
-# app.py - Final Working Version for Python 3.14
+# app.py - Fixed version with proper error handling
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import joblib
-import h5py
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -39,13 +38,6 @@ st.markdown("""
         font-weight: 600;
         width: 100%;
     }
-    .upload-box {
-        border: 2px dashed #667eea;
-        border-radius: 20px;
-        padding: 30px;
-        text-align: center;
-        background: #f8f9fa;
-    }
     .alert-high {
         background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
         border-radius: 10px;
@@ -74,6 +66,8 @@ if 'model' not in st.session_state:
     st.session_state.model = None
 if 'scaler' not in st.session_state:
     st.session_state.scaler = None
+if 'predictions_made' not in st.session_state:
+    st.session_state.predictions_made = False
 
 # Sidebar
 with st.sidebar:
@@ -87,38 +81,37 @@ with st.sidebar:
         st.success("✅ Model Ready")
         if st.button("🔄 Reload Model"):
             st.session_state.model_loaded = False
+            st.session_state.model = None
+            st.session_state.scaler = None
             st.rerun()
     else:
         st.info("Upload your trained model files:")
         
-        model_file = st.file_uploader("Model (.keras or .h5)", type=['keras', 'h5'])
-        scaler_file = st.file_uploader("Scaler (.pkl)", type=['pkl'])
+        model_file = st.file_uploader("Model (.keras or .h5)", type=['keras', 'h5'], key="model_upload")
+        scaler_file = st.file_uploader("Scaler (.pkl)", type=['pkl'], key="scaler_upload")
         
         if model_file and scaler_file:
             with st.spinner("Loading model..."):
                 try:
-                    # Try to load with tensorflow if available
-                    try:
-                        import tensorflow as tf
-                        from tensorflow import keras
-                        
-                        with open('temp_model.keras', 'wb') as f:
-                            f.write(model_file.getbuffer())
-                        with open('temp_scaler.pkl', 'wb') as f:
-                            f.write(scaler_file.getbuffer())
-                        
-                        st.session_state.model = keras.models.load_model('temp_model.keras')
-                        st.session_state.scaler = joblib.load('temp_scaler.pkl')
-                        st.session_state.model_loaded = True
-                        st.success("✅ Model loaded successfully!")
-                        st.rerun()
-                    except ImportError:
-                        st.warning("⚠️ TensorFlow not available. Using demo mode.")
-                        st.session_state.demo_mode = True
-                        st.session_state.model_loaded = True
-                        st.rerun()
+                    import tensorflow as tf
+                    from tensorflow import keras
+                    
+                    # Save uploaded files
+                    with open('temp_model.keras', 'wb') as f:
+                        f.write(model_file.getbuffer())
+                    with open('temp_scaler.pkl', 'wb') as f:
+                        f.write(scaler_file.getbuffer())
+                    
+                    # Load model and scaler
+                    st.session_state.model = keras.models.load_model('temp_model.keras')
+                    st.session_state.scaler = joblib.load('temp_scaler.pkl')
+                    st.session_state.model_loaded = True
+                    st.success("✅ Model loaded successfully!")
+                    st.rerun()
+                except ImportError:
+                    st.error("❌ TensorFlow not available. Please install tensorflow or use demo mode.")
                 except Exception as e:
-                    st.error(f"Error: {str(e)}")
+                    st.error(f"Error loading model: {str(e)}")
     
     st.markdown("---")
     st.caption("© 2024 NeuroXAI DL")
@@ -129,14 +122,16 @@ st.markdown("### Advanced EEG-based Seizure Detection System")
 st.markdown("---")
 
 if not st.session_state.model_loaded:
-    st.info("👈 **Get Started**: Load your trained model files in the sidebar")
+    st.info("👈 **Get Started**: Load your trained model files in the sidebar first")
+    
+    # Show instructions
     col1, col2, col3 = st.columns(3)
     with col1:
         st.markdown("""
         <div class="metric-card">
             <h3>📁</h3>
             <h4>Step 1</h4>
-            <p>Upload Model</p>
+            <p>Upload Model Files</p>
         </div>
         """, unsafe_allow_html=True)
     with col2:
@@ -155,6 +150,14 @@ if not st.session_state.model_loaded:
             <p>Get Predictions</p>
         </div>
         """, unsafe_allow_html=True)
+    
+    # Demo mode option
+    st.markdown("---")
+    if st.button("🎮 Try Demo Mode (No Model Required)"):
+        st.session_state.demo_mode = True
+        st.session_state.model_loaded = True
+        st.rerun()
+
 else:
     # File upload for EEG data
     st.subheader("📤 Upload EEG Data")
@@ -175,21 +178,20 @@ else:
             st.dataframe(df.head())
         
         if st.button("🔬 Analyze EEG", type="primary", use_container_width=True):
-            with st.spinner("🧠 Analyzing with your model..."):
-                # Preprocess
-                X_input = st.session_state.scaler.transform(df)
-                
-                # Predict
-                if st.session_state.model is not None:
+            with st.spinner("🧠 Analyzing..."):
+                # Check if we have a real model or demo mode
+                if st.session_state.model is not None and st.session_state.scaler is not None:
+                    # Use actual model
+                    X_input = st.session_state.scaler.transform(df)
                     predictions_proba = st.session_state.model.predict(X_input, verbose=0)
                     predictions = np.argmax(predictions_proba, axis=1) + 1
                     confidences = np.max(predictions_proba, axis=1)
                 else:
-                    # Demo predictions
+                    # Demo mode
                     np.random.seed(42)
                     predictions = np.random.choice([1,2,3,4,5], len(df), p=[0.08,0.12,0.15,0.25,0.40])
                     confidences = np.random.uniform(0.75, 0.98, len(df))
-                    st.info("ℹ️ Using demo mode. Load actual model for real predictions.")
+                    st.info("ℹ️ Using demo predictions. Load actual model for real results.")
             
             st.success("✅ Analysis complete!")
             
@@ -217,7 +219,7 @@ else:
             results_df = pd.DataFrame({
                 'Sample': range(1, len(df)+1),
                 'Predicted Class': predictions,
-                'Risk Level': ['🔴 High' if p<=2 else '🟡 Borderline' if p==3 else '🟢 Low' if p==4 else '✅ Normal' for p in predictions],
+                'Risk Level': ['🔴 High Risk' if p<=2 else '🟡 Borderline' if p==3 else '🟢 Low Risk' if p==4 else '✅ Normal' for p in predictions],
                 'Confidence': [f"{c:.2%}" for c in confidences]
             })
             
