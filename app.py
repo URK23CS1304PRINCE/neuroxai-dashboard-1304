@@ -1,10 +1,9 @@
-# app.py - Complete Working Version (No duplicate keys)
+# app.py - Simplified Working Version
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import json
 import joblib
 import warnings
 warnings.filterwarnings('ignore')
@@ -32,60 +31,10 @@ st.markdown("""
 # Initialize session state
 if 'model_loaded' not in st.session_state:
     st.session_state.model_loaded = False
-if 'weights_data' not in st.session_state:
-    st.session_state.weights_data = None
+if 'model' not in st.session_state:
+    st.session_state.model = None
 if 'scaler' not in st.session_state:
     st.session_state.scaler = None
-
-# Neural Network class using NumPy only
-class SimpleNeuralNetwork:
-    def __init__(self, weights_data):
-        self.layer_weights = []
-        self.layer_biases = []
-        self._build_from_weights(weights_data)
-    
-    def _build_from_weights(self, weights_data):
-        """Build network from extracted weights"""
-        layer_weights = {}
-        layer_biases = {}
-        
-        for key, value in weights_data.items():
-            if 'weights' in key:
-                parts = key.split('_')
-                if len(parts) >= 3:
-                    layer_num = parts[2]
-                else:
-                    layer_num = parts[1]
-                layer_weights[layer_num] = np.array(value)
-            elif 'bias' in key:
-                parts = key.split('_')
-                if len(parts) >= 3:
-                    layer_num = parts[2]
-                else:
-                    layer_num = parts[1]
-                layer_biases[layer_num] = np.array(value)
-        
-        # Sort layers
-        sorted_keys = sorted(layer_weights.keys(), key=lambda x: int(x))
-        self.layer_weights = [layer_weights[k] for k in sorted_keys]
-        self.layer_biases = [layer_biases[k] for k in sorted_keys]
-    
-    def relu(self, x):
-        return np.maximum(0, x)
-    
-    def softmax(self, x):
-        exp_x = np.exp(x - np.max(x, axis=1, keepdims=True))
-        return exp_x / np.sum(exp_x, axis=1, keepdims=True)
-    
-    def predict(self, X):
-        """Forward pass through the network"""
-        x = X
-        for i in range(len(self.layer_weights) - 1):
-            x = self.relu(np.dot(x, self.layer_weights[i]) + self.layer_biases[i])
-        
-        # Last layer
-        x = np.dot(x, self.layer_weights[-1]) + self.layer_biases[-1]
-        return self.softmax(x)
 
 # Sidebar
 with st.sidebar:
@@ -99,27 +48,28 @@ with st.sidebar:
         st.success("✅ Model Ready")
         if st.button("🔄 Reload Model"):
             st.session_state.model_loaded = False
-            st.session_state.weights_data = None
+            st.session_state.model = None
             st.session_state.scaler = None
             st.rerun()
     else:
-        st.info("Upload your model files:")
+        st.info("Upload your trained model files:")
         
-        weights_file = st.file_uploader("Model Weights (.json)", type=['json'])
-        scaler_file = st.file_uploader("Scaler (.pkl)", type=['pkl'])
+        # Use different keys for each file uploader
+        model_file = st.file_uploader("Model (.pkl or .joblib)", type=['pkl', 'joblib'], key="model_upload_unique")
+        scaler_file = st.file_uploader("Scaler (.pkl)", type=['pkl'], key="scaler_upload_unique")
         
-        if weights_file and scaler_file:
+        if model_file and scaler_file:
             with st.spinner("Loading model..."):
                 try:
-                    # Load weights
-                    st.session_state.weights_data = json.load(weights_file)
-                    # Load scaler
+                    # Save and load model
+                    st.session_state.model = joblib.load(model_file)
                     st.session_state.scaler = joblib.load(scaler_file)
                     st.session_state.model_loaded = True
                     st.success("✅ Model loaded successfully!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error: {str(e)}")
+                    st.info("Make sure you uploaded the correct model file format.")
     
     st.markdown("---")
     st.caption("© 2024 NeuroXAI DL")
@@ -130,7 +80,7 @@ st.markdown("### Advanced EEG-based Seizure Detection System")
 st.markdown("---")
 
 if not st.session_state.model_loaded:
-    st.info("👈 **Get Started**: Upload your model weights (.json) and scaler (.pkl) files")
+    st.info("👈 **Get Started**: Upload your trained model (.pkl) and scaler (.pkl) files")
     
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -141,6 +91,8 @@ if not st.session_state.model_loaded:
         st.markdown('<div class="metric-card"><h3>🔬</h3><h4>Step 3</h4><p>Get Results</p></div>', unsafe_allow_html=True)
     
     st.markdown("---")
+    
+    # Demo mode
     if st.button("🎮 Try Demo Mode (No Model Required)"):
         st.session_state.demo_mode = True
         st.session_state.model_loaded = True
@@ -168,15 +120,32 @@ else:
             st.dataframe(df.head())
         
         if st.button("🔬 Analyze EEG", type="primary", use_container_width=True):
-            with st.spinner("🧠 Analyzing with your neural network..."):
+            with st.spinner("🧠 Analyzing with your model..."):
                 # Check if we have real model or demo mode
-                if st.session_state.weights_data is not None and st.session_state.scaler is not None:
-                    # Use real model
-                    model = SimpleNeuralNetwork(st.session_state.weights_data)
-                    X_input = st.session_state.scaler.transform(df)
-                    predictions_proba = model.predict(X_input)
-                    predictions = np.argmax(predictions_proba, axis=1) + 1
-                    confidences = np.max(predictions_proba, axis=1)
+                if st.session_state.model is not None and st.session_state.scaler is not None:
+                    try:
+                        # Use real model
+                        X_input = st.session_state.scaler.transform(df)
+                        
+                        # Handle different model types
+                        if hasattr(st.session_state.model, 'predict'):
+                            predictions_proba = st.session_state.model.predict(X_input)
+                            if len(predictions_proba.shape) == 1:
+                                # Binary classification
+                                predictions = (predictions_proba > 0.5).astype(int) + 1
+                                confidences = np.where(predictions == 1, predictions_proba, 1 - predictions_proba)
+                            else:
+                                # Multi-class
+                                predictions = np.argmax(predictions_proba, axis=1) + 1
+                                confidences = np.max(predictions_proba, axis=1)
+                        else:
+                            raise ValueError("Model doesn't have predict method")
+                    except Exception as e:
+                        st.error(f"Model prediction error: {str(e)}")
+                        st.info("Falling back to demo mode")
+                        np.random.seed(42)
+                        predictions = np.random.choice([1,2,3,4,5], len(df), p=[0.08,0.12,0.15,0.25,0.40])
+                        confidences = np.random.uniform(0.75, 0.98, len(df))
                 else:
                     # Demo mode
                     np.random.seed(42)
@@ -196,7 +165,7 @@ else:
             normal = np.sum(predictions == 5)
             
             with col1:
-                st.metric("🔴 High Risk", high_risk, delta=f"{high_risk/len(predictions)*100:.0f}%", delta_color="inverse")
+                st.metric("🔴 High Risk", high_risk, delta=f"{high_risk/len(predictions)*100:.0f}%")
             with col2:
                 st.metric("🟡 Borderline", moderate_risk, delta=f"{moderate_risk/len(predictions)*100:.0f}%")
             with col3:
@@ -207,12 +176,10 @@ else:
             # Risk distribution chart
             risk_data = pd.DataFrame({
                 'Risk Level': ['High Risk', 'Borderline', 'Low Risk', 'Normal'],
-                'Count': [high_risk, moderate_risk, low_risk, normal],
-                'Color': ['#e74c3c', '#f39c12', '#2ecc71', '#3498db']
+                'Count': [high_risk, moderate_risk, low_risk, normal]
             })
-            
             fig = px.bar(risk_data, x='Risk Level', y='Count', color='Risk Level',
-                         color_discrete_sequence=risk_data['Color'],
+                         color_discrete_sequence=['#e74c3c', '#f39c12', '#2ecc71', '#3498db'],
                          title="Risk Distribution")
             fig.update_layout(height=400)
             st.plotly_chart(fig, use_container_width=True)
@@ -252,12 +219,7 @@ else:
                     <div class="alert-high">
                         <h3>🔴 HIGH RISK - SEIZURE ACTIVITY DETECTED</h3>
                         <p><strong>Confidence:</strong> {confidence:.2%}</p>
-                        <p><strong>Clinical Action Required:</strong></p>
-                        <ul>
-                            <li>Immediate neurological consultation</li>
-                            <li>Schedule follow-up EEG within 24-48 hours</li>
-                            <li>Consider anti-epileptic medication</li>
-                        </ul>
+                        <p><strong>Action Required:</strong> Immediate neurological consultation</p>
                     </div>
                     """, unsafe_allow_html=True)
                 elif pred_class == 2:
@@ -265,12 +227,7 @@ else:
                     <div class="alert-moderate">
                         <h3>🟠 MODERATE RISK - ABNORMAL ACTIVITY</h3>
                         <p><strong>Confidence:</strong> {confidence:.2%}</p>
-                        <p><strong>Clinical Action Required:</strong></p>
-                        <ul>
-                            <li>Neurological follow-up within 1 week</li>
-                            <li>Consider sleep-deprived EEG</li>
-                            <li>Monitor for clinical symptoms</li>
-                        </ul>
+                        <p><strong>Action Required:</strong> Follow-up within 1 week</p>
                     </div>
                     """, unsafe_allow_html=True)
                 elif pred_class == 3:
@@ -278,12 +235,7 @@ else:
                     <div class="alert-moderate">
                         <h3>🟡 BORDERLINE - SUBTLE ABNORMALITIES</h3>
                         <p><strong>Confidence:</strong> {confidence:.2%}</p>
-                        <p><strong>Clinical Action Required:</strong></p>
-                        <ul>
-                            <li>Repeat EEG in 2-4 weeks</li>
-                            <li>Clinical correlation advised</li>
-                            <li>Consider ambulatory EEG monitoring</li>
-                        </ul>
+                        <p><strong>Action Required:</strong> Repeat EEG in 2-4 weeks</p>
                     </div>
                     """, unsafe_allow_html=True)
                 else:
@@ -291,14 +243,9 @@ else:
                     <div class="alert-normal">
                         <h3>✅ LOW RISK / NORMAL</h3>
                         <p><strong>Confidence:</strong> {confidence:.2%}</p>
-                        <p><strong>Clinical Action Required:</strong></p>
-                        <ul>
-                            <li>Routine follow-up as clinically indicated</li>
-                            <li>Patient reassurance</li>
-                            <li>Return to normal activities</li>
-                        </ul>
+                        <p><strong>Action Required:</strong> Routine monitoring</p>
                     </div>
                     """, unsafe_allow_html=True)
 
 st.markdown("---")
-st.markdown("<p style='text-align: center;'>🧠 NeuroXAI DL | AI-Powered EEG Analysis | Clinical Decision Support System</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center;'>🧠 NeuroXAI DL | AI-Powered EEG Analysis | Clinical Decision Support</p>", unsafe_allow_html=True)
