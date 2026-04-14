@@ -1,9 +1,10 @@
-# app.py - Simplified Working Version
+# app.py - Using ONNX Runtime (No TensorFlow/Keras needed!)
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import onnxruntime as ort
 import joblib
 import warnings
 warnings.filterwarnings('ignore')
@@ -31,8 +32,8 @@ st.markdown("""
 # Initialize session state
 if 'model_loaded' not in st.session_state:
     st.session_state.model_loaded = False
-if 'model' not in st.session_state:
-    st.session_state.model = None
+if 'session' not in st.session_state:
+    st.session_state.session = None
 if 'scaler' not in st.session_state:
     st.session_state.scaler = None
 
@@ -48,28 +49,32 @@ with st.sidebar:
         st.success("✅ Model Ready")
         if st.button("🔄 Reload Model"):
             st.session_state.model_loaded = False
-            st.session_state.model = None
+            st.session_state.session = None
             st.session_state.scaler = None
             st.rerun()
     else:
-        st.info("Upload your trained model files:")
+        st.info("Upload your model files:")
         
-        # Use different keys for each file uploader
-        model_file = st.file_uploader("Model (.pkl or .joblib)", type=['pkl', 'joblib'], key="model_upload_unique")
-        scaler_file = st.file_uploader("Scaler (.pkl)", type=['pkl'], key="scaler_upload_unique")
+        model_file = st.file_uploader("ONNX Model (.onnx)", type=['onnx'])
+        scaler_file = st.file_uploader("Scaler (.pkl)", type=['pkl'])
         
         if model_file and scaler_file:
             with st.spinner("Loading model..."):
                 try:
-                    # Save and load model
-                    st.session_state.model = joblib.load(model_file)
-                    st.session_state.scaler = joblib.load(scaler_file)
+                    # Save uploaded files
+                    with open('temp_model.onnx', 'wb') as f:
+                        f.write(model_file.getbuffer())
+                    with open('temp_scaler.pkl', 'wb') as f:
+                        f.write(scaler_file.getbuffer())
+                    
+                    # Load ONNX model
+                    st.session_state.session = ort.InferenceSession('temp_model.onnx')
+                    st.session_state.scaler = joblib.load('temp_scaler.pkl')
                     st.session_state.model_loaded = True
                     st.success("✅ Model loaded successfully!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error: {str(e)}")
-                    st.info("Make sure you uploaded the correct model file format.")
     
     st.markdown("---")
     st.caption("© 2024 NeuroXAI DL")
@@ -80,7 +85,7 @@ st.markdown("### Advanced EEG-based Seizure Detection System")
 st.markdown("---")
 
 if not st.session_state.model_loaded:
-    st.info("👈 **Get Started**: Upload your trained model (.pkl) and scaler (.pkl) files")
+    st.info("👈 **Get Started**: Upload your ONNX model (.onnx) and scaler (.pkl) files")
     
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -92,7 +97,6 @@ if not st.session_state.model_loaded:
     
     st.markdown("---")
     
-    # Demo mode
     if st.button("🎮 Try Demo Mode (No Model Required)"):
         st.session_state.demo_mode = True
         st.session_state.model_loaded = True
@@ -121,27 +125,24 @@ else:
         
         if st.button("🔬 Analyze EEG", type="primary", use_container_width=True):
             with st.spinner("🧠 Analyzing with your model..."):
-                # Check if we have real model or demo mode
-                if st.session_state.model is not None and st.session_state.scaler is not None:
+                if st.session_state.session is not None and st.session_state.scaler is not None:
                     try:
-                        # Use real model
+                        # Preprocess
                         X_input = st.session_state.scaler.transform(df)
+                        X_input = X_input.astype(np.float32)
                         
-                        # Handle different model types
-                        if hasattr(st.session_state.model, 'predict'):
-                            predictions_proba = st.session_state.model.predict(X_input)
-                            if len(predictions_proba.shape) == 1:
-                                # Binary classification
-                                predictions = (predictions_proba > 0.5).astype(int) + 1
-                                confidences = np.where(predictions == 1, predictions_proba, 1 - predictions_proba)
-                            else:
-                                # Multi-class
-                                predictions = np.argmax(predictions_proba, axis=1) + 1
-                                confidences = np.max(predictions_proba, axis=1)
-                        else:
-                            raise ValueError("Model doesn't have predict method")
+                        # Get input name
+                        input_name = st.session_state.session.get_inputs()[0].name
+                        
+                        # Predict
+                        predictions_proba = st.session_state.session.run(None, {input_name: X_input})[0]
+                        
+                        # Get predictions
+                        predictions = np.argmax(predictions_proba, axis=1) + 1
+                        confidences = np.max(predictions_proba, axis=1)
+                        
                     except Exception as e:
-                        st.error(f"Model prediction error: {str(e)}")
+                        st.error(f"Prediction error: {str(e)}")
                         st.info("Falling back to demo mode")
                         np.random.seed(42)
                         predictions = np.random.choice([1,2,3,4,5], len(df), p=[0.08,0.12,0.15,0.25,0.40])
