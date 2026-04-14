@@ -1,9 +1,10 @@
-# app.py - Using Joblib (Simplest, most reliable)
+# app.py - Pure NumPy implementation (No TensorFlow/Keras needed!)
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import json
 import joblib
 import warnings
 warnings.filterwarnings('ignore')
@@ -26,6 +27,47 @@ st.markdown("""
     .alert-normal { background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%); border-radius: 10px; padding: 20px; color: #333; }
 </style>
 """, unsafe_allow_html=True)
+
+# Neural Network class using NumPy only
+class SimpleNeuralNetwork:
+    def __init__(self, weights_data):
+        self.layers = []
+        self._build_from_weights(weights_data)
+    
+    def _build_from_weights(self, weights_data):
+        """Build network from extracted weights"""
+        # Parse weights
+        layer_weights = {}
+        layer_biases = {}
+        
+        for key, value in weights_data.items():
+            if 'weights' in key:
+                layer_num = key.split('_')[1]
+                layer_weights[layer_num] = np.array(value)
+            elif 'bias' in key:
+                layer_num = key.split('_')[1]
+                layer_biases[layer_num] = np.array(value)
+        
+        # Sort layers
+        self.layer_weights = [layer_weights[k] for k in sorted(layer_weights.keys())]
+        self.layer_biases = [layer_biases[k] for k in sorted(layer_biases.keys())]
+    
+    def relu(self, x):
+        return np.maximum(0, x)
+    
+    def softmax(self, x):
+        exp_x = np.exp(x - np.max(x, axis=1, keepdims=True))
+        return exp_x / np.sum(exp_x, axis=1, keepdims=True)
+    
+    def predict(self, X):
+        """Forward pass through the network"""
+        x = X
+        for i, (w, b) in enumerate(zip(self.layer_weights[:-1], self.layer_biases[:-1])):
+            x = self.relu(np.dot(x, w) + b)
+        
+        # Last layer (no ReLU, just softmax)
+        x = np.dot(x, self.layer_weights[-1]) + self.layer_biases[-1]
+        return self.softmax(x)
 
 # Initialize session state
 if 'model_loaded' not in st.session_state:
@@ -51,22 +93,20 @@ with st.sidebar:
             st.session_state.scaler = None
             st.rerun()
     else:
-        st.info("Upload your trained model files:")
+        st.info("Upload your model files:")
         
-        model_file = st.file_uploader("Model (.joblib)", type=['joblib'], key="model_upload")
-        scaler_file = st.file_uploader("Scaler (.pkl)", type=['pkl'], key="scaler_upload")
+        weights_file = st.file_uploader("Model Weights (.json)", type=['json'], key="weights")
+        scaler_file = st.file_uploader("Scaler (.pkl)", type=['pkl'], key="scaler")
         
-        if model_file and scaler_file:
+        if weights_file and scaler_file:
             with st.spinner("Loading model..."):
                 try:
-                    # Save and load model
-                    with open('temp_model.joblib', 'wb') as f:
-                        f.write(model_file.getbuffer())
-                    with open('temp_scaler.pkl', 'wb') as f:
-                        f.write(scaler_file.getbuffer())
+                    # Load weights
+                    weights_data = json.load(weights_file)
+                    st.session_state.model = SimpleNeuralNetwork(weights_data)
                     
-                    st.session_state.model = joblib.load('temp_model.joblib')
-                    st.session_state.scaler = joblib.load('temp_scaler.pkl')
+                    # Load scaler
+                    st.session_state.scaler = joblib.load(scaler_file)
                     st.session_state.model_loaded = True
                     st.success("✅ Model loaded successfully!")
                     st.rerun()
@@ -82,7 +122,7 @@ st.markdown("### Advanced EEG-based Seizure Detection System")
 st.markdown("---")
 
 if not st.session_state.model_loaded:
-    st.info("👈 **Get Started**: Upload your .joblib model and .pkl scaler files in the sidebar")
+    st.info("👈 **Get Started**: Upload your model weights (.json) and scaler (.pkl) files")
     
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -108,46 +148,66 @@ else:
         if 'y' in df.columns:
             df = df.drop('y', axis=1)
         
-        st.success(f"✅ Loaded {len(df)} samples")
+        st.success(f"✅ Loaded {len(df)} samples with {df.shape[1]} features")
         
         with st.expander("📊 Preview"):
             st.dataframe(df.head())
         
         if st.button("🔬 Analyze EEG", type="primary", use_container_width=True):
-            with st.spinner("Analyzing..."):
+            with st.spinner("Analyzing with your neural network..."):
                 if st.session_state.model is not None:
+                    # Preprocess
                     X_input = st.session_state.scaler.transform(df)
-                    predictions_proba = st.session_state.model.predict(X_input, verbose=0)
+                    # Predict
+                    predictions_proba = st.session_state.model.predict(X_input)
                     predictions = np.argmax(predictions_proba, axis=1) + 1
                     confidences = np.max(predictions_proba, axis=1)
                 else:
+                    # Demo mode
                     np.random.seed(42)
                     predictions = np.random.choice([1,2,3,4,5], len(df), p=[0.08,0.12,0.15,0.25,0.40])
                     confidences = np.random.uniform(0.75, 0.98, len(df))
-                    st.info("ℹ️ Demo mode")
+                    st.info("ℹ️ Using demo mode")
             
-            st.success("✅ Complete!")
+            st.success("✅ Analysis complete!")
             
             # Results
             col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("🔴 High Risk", np.sum(predictions <= 2))
-            with col2:
-                st.metric("🟡 Borderline", np.sum(predictions == 3))
-            with col3:
-                st.metric("🟢 Low Risk", np.sum(predictions == 4))
-            with col4:
-                st.metric("✅ Normal", np.sum(predictions == 5))
+            high_risk = np.sum(predictions <= 2)
+            moderate_risk = np.sum(predictions == 3)
+            low_risk = np.sum(predictions == 4)
+            normal = np.sum(predictions == 5)
             
+            with col1:
+                st.metric("🔴 High Risk", high_risk, delta=f"{high_risk/len(predictions)*100:.0f}%")
+            with col2:
+                st.metric("🟡 Borderline", moderate_risk, delta=f"{moderate_risk/len(predictions)*100:.0f}%")
+            with col3:
+                st.metric("🟢 Low Risk", low_risk, delta=f"{low_risk/len(predictions)*100:.0f}%")
+            with col4:
+                st.metric("✅ Normal", normal, delta=f"{normal/len(predictions)*100:.0f}%")
+            
+            # Risk distribution chart
+            risk_data = pd.DataFrame({
+                'Risk Level': ['High Risk', 'Borderline', 'Low Risk', 'Normal'],
+                'Count': [high_risk, moderate_risk, low_risk, normal]
+            })
+            fig = px.bar(risk_data, x='Risk Level', y='Count', color='Risk Level',
+                         color_discrete_sequence=['#e74c3c', '#f39c12', '#2ecc71', '#3498db'])
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Results table
             results_df = pd.DataFrame({
                 'Sample': range(1, len(df)+1),
                 'Predicted Class': predictions,
+                'Risk Level': ['🔴 High' if p<=2 else '🟡 Borderline' if p==3 else '🟢 Low' if p==4 else '✅ Normal' for p in predictions],
                 'Confidence': [f"{c:.2%}" for c in confidences]
             })
-            st.dataframe(results_df, use_container_width=True)
+            st.dataframe(results_df, use_container_width=True, height=400)
             
+            # Download button
             csv = results_df.to_csv(index=False)
-            st.download_button("📥 Download CSV", csv, "predictions.csv")
+            st.download_button("📥 Download Results (CSV)", csv, "predictions.csv")
 
 st.markdown("---")
-st.markdown("<p style='text-align: center;'>🧠 NeuroXAI DL | AI-Powered EEG Analysis</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center;'>🧠 NeuroXAI DL | AI-Powered EEG Analysis | No TensorFlow Required</p>", unsafe_allow_html=True)
