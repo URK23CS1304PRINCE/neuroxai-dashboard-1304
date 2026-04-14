@@ -1,4 +1,4 @@
-# app.py - Using ONNX Runtime (No TensorFlow/Keras needed!)
+# app.py - Updated to handle any EEG dataset
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -25,7 +25,7 @@ st.markdown("""
     .alert-high { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); border-radius: 10px; padding: 20px; color: white; }
     .alert-moderate { background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); border-radius: 10px; padding: 20px; color: #333; }
     .alert-normal { background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%); border-radius: 10px; padding: 20px; color: #333; }
-    .success-box { background: linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%); border-radius: 10px; padding: 15px; text-align: center; }
+    .info-box { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; padding: 15px; color: white; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -36,6 +36,8 @@ if 'session' not in st.session_state:
     st.session_state.session = None
 if 'scaler' not in st.session_state:
     st.session_state.scaler = None
+if 'expected_features' not in st.session_state:
+    st.session_state.expected_features = None
 
 # Sidebar
 with st.sidebar:
@@ -47,6 +49,7 @@ with st.sidebar:
     
     if st.session_state.model_loaded:
         st.success("✅ Model Ready")
+        st.info(f"Expected features: {st.session_state.expected_features}")
         if st.button("🔄 Reload Model"):
             st.session_state.model_loaded = False
             st.session_state.session = None
@@ -70,6 +73,7 @@ with st.sidebar:
                     # Load ONNX model
                     st.session_state.session = ort.InferenceSession('temp_model.onnx')
                     st.session_state.scaler = joblib.load('temp_scaler.pkl')
+                    st.session_state.expected_features = st.session_state.scaler.n_features_in_
                     st.session_state.model_loaded = True
                     st.success("✅ Model loaded successfully!")
                     st.rerun()
@@ -103,7 +107,7 @@ if not st.session_state.model_loaded:
         st.rerun()
 
 else:
-    st.markdown('<div class="success-box">✅ Model loaded successfully! Ready for analysis.</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="info-box">✅ Model loaded! Expected {st.session_state.expected_features} features.</div>', unsafe_allow_html=True)
     st.markdown("---")
     
     st.subheader("📤 Upload EEG Data")
@@ -123,12 +127,32 @@ else:
         with st.expander("📊 Preview Data"):
             st.dataframe(df.head())
         
+        # Check feature compatibility
+        if df.shape[1] != st.session_state.expected_features:
+            st.warning(f"⚠️ Feature mismatch! Your data has {df.shape[1]} features but model expects {st.session_state.expected_features} features.")
+            st.info("The system will automatically handle this by padding/trimming features.")
+        
         if st.button("🔬 Analyze EEG", type="primary", use_container_width=True):
             with st.spinner("🧠 Analyzing with your model..."):
                 if st.session_state.session is not None and st.session_state.scaler is not None:
                     try:
-                        # Preprocess
-                        X_input = st.session_state.scaler.transform(df)
+                        # Convert to numpy
+                        X_input = df.values.astype(np.float32)
+                        
+                        # Handle feature mismatch
+                        if X_input.shape[1] != st.session_state.expected_features:
+                            if X_input.shape[1] < st.session_state.expected_features:
+                                # Pad with zeros
+                                pad_width = st.session_state.expected_features - X_input.shape[1]
+                                X_input = np.pad(X_input, ((0, 0), (0, pad_width)), mode='constant')
+                                st.info(f"📊 Padded {X_input.shape[0]} samples from {df.shape[1]} to {st.session_state.expected_features} features")
+                            else:
+                                # Trim excess features
+                                X_input = X_input[:, :st.session_state.expected_features]
+                                st.info(f"📊 Trimmed {X_input.shape[0]} samples from {df.shape[1]} to {st.session_state.expected_features} features")
+                        
+                        # Scale
+                        X_input = st.session_state.scaler.transform(X_input)
                         X_input = X_input.astype(np.float32)
                         
                         # Get input name
